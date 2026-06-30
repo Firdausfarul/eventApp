@@ -1,0 +1,54 @@
+# Liburan di Jakarta — local/self-hosted stack.
+#
+#   docker compose up -d            → frontend + backend API
+#                                     (frontend on :8088, API proxied at /api)
+#   docker compose --profile tiles up -d
+#                                   → also start your own OSM raster tile server
+#
+# Map tiles default to public OSM (dev). For self-hosted tiles, see README.
+
+services:
+  app:
+    build: .
+    image: liburan-jakarta:latest
+    ports:
+      - "8088:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: liburan-jakarta-api:latest
+    environment:
+      - PORT=3000
+      - DB_PATH=/app/backend/data/app.db
+      # Admin (HTTP Basic). GANTI sebelum produksi! Kosongkan untuk matikan admin.
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASS=${ADMIN_PASS:-changeme}
+    volumes:
+      - api-data:/app/backend/data
+    ports:
+      - "3000:3000" # optional: direct API access for debugging
+    restart: unless-stopped
+
+  # Optional: self-hosted OpenStreetMap raster tiles (only starts with --profile tiles).
+  # First-time import is required before `run` works — see README "Self-hosting tiles".
+  tileserver:
+    image: overv/openstreetmap-tile-server:latest
+    profiles: ["tiles"]
+    command: run
+    ports:
+      - "8080:80"
+    volumes:
+      - osm-data:/data/database
+      - osm-tiles:/data/tiles
+    shm_size: "256m"
+    restart: unless-stopped
+
+volumes:
+  api-data:
+  osm-data:
+  osm-tiles:

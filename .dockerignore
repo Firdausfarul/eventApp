@@ -1,0 +1,10 @@
+# Keep build contexts lean. NOTE: both images use repo root as context, so do
+# NOT ignore backend/ — the API image needs it. We only drop heavy/dev cruft.
+.git
+.gitignore
+*.log
+.DS_Store
+tiles/
+backend/node_modules
+backend/data
+*.dc.html

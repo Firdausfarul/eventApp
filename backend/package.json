@@ -1,0 +1,17 @@
+{
+  "name": "liburan-jakarta-api",
+  "version": "1.0.0",
+  "description": "Read API + admin for Liburan di Jakarta (PRD §4).",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "seed": "node src/db.js",
+    "test": "node test/smoke.test.js"
+  },
+  "engines": { "node": ">=22.5" },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}

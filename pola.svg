@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="60" viewBox="0 0 240 60">
+  <!-- +Jakarta "Pola": square + triangle, MENOR colors. Tiles horizontally as a
+       clean civic frieze (seamless: no shape crosses the 240px edge). -->
+  <rect x="0" y="0" width="60" height="60" fill="#FC351C"/>
+  <polygon points="60,0 120,0 90,60"   fill="#FEB52B"/>
+  <polygon points="120,60 180,60 150,0" fill="#1FAE5D"/>
+  <rect x="196" y="14" width="32" height="32" fill="#00AAFF"/>
+</svg>
