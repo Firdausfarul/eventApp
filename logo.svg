@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 72" width="340" height="72">
+  <rect x="0" y="4" width="64" height="64" rx="10" fill="#FC351C"/>
+  <!-- magnifying glass: ring + handle, searching -->
+  <circle cx="25" cy="29" r="13" fill="none" stroke="#fff" stroke-width="5.5"/>
+  <line x1="34.5" y1="38.5" x2="45" y2="49" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+  <!-- classic map pin sitting inside the lens: head + tail + punched hole -->
+  <circle cx="25" cy="25" r="5" fill="#fff"/>
+  <path d="M 21 28 L 29 28 L 25 36.5 Z" fill="#fff"/>
+  <circle cx="25" cy="25" r="1.9" fill="#FC351C"/>
+  <text x="78" y="38" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-weight="800" font-size="26" letter-spacing="-.3" fill="#1A1320">Internacia Jakarta</text>
+  <text x="78" y="58" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-weight="600" font-size="13" letter-spacing=".2" fill="#7A6558">Kegiatan seru, gratis &amp; murah</text>
+</svg>

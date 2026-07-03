@@ -38,6 +38,7 @@ function createSchema() {
       usia_min INTEGER, usia_max INTEGER,
       lokasi_nama TEXT, area TEXT,
       tanggal TEXT, jam TEXT, biaya TEXT, link TEXT,
+      media_url TEXT,
       lat REAL, lng REAL, map_x REAL, map_y REAL,
       perlu_daftar INTEGER DEFAULT 0, rutin INTEGER DEFAULT 0, kontak_wa TEXT,
       window_mulai TEXT, window_selesai TEXT
@@ -79,7 +80,18 @@ function createSchema() {
       urutan INTEGER DEFAULT 0,
       PRIMARY KEY (curator_id, activity_id)
     );
+
+    CREATE TABLE IF NOT EXISTS analytics_event (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      activity_id TEXT,
+      plan_size INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
   `);
+
+  const cols = db.prepare('PRAGMA table_info(activity)').all().map(c => c.name);
+  if (!cols.includes('media_url')) db.exec('ALTER TABLE activity ADD COLUMN media_url TEXT');
 }
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -90,8 +102,8 @@ function seed() {
 
   const insOrg = db.prepare('INSERT OR IGNORE INTO organizer (id,nama,instansi,kontak) VALUES (?,?,?,?)');
   const insAct = db.prepare(`INSERT INTO activity
-    (id,nama,penyelenggara_id,penyelenggara,color,emoji,deskripsi,usia_min,usia_max,lokasi_nama,area,tanggal,jam,biaya,link,lat,lng,map_x,map_y,perlu_daftar,rutin,kontak_wa,window_mulai,window_selesai)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    (id,nama,penyelenggara_id,penyelenggara,color,emoji,deskripsi,usia_min,usia_max,lokasi_nama,area,tanggal,jam,biaya,link,media_url,lat,lng,map_x,map_y,perlu_daftar,rutin,kontak_wa,window_mulai,window_selesai)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const insCat = db.prepare('INSERT OR IGNORE INTO activity_category (activity_id,kategori) VALUES (?,?)');
   const insOcc = db.prepare('INSERT OR IGNORE INTO occurrence (activity_id,dow) VALUES (?,?)');
   const insTier = db.prepare('INSERT INTO ticket_tier (activity_id,urutan,label,harga) VALUES (?,?,?,?)');
@@ -108,7 +120,7 @@ function seed() {
       const win = WINDOW[p.id] || PERIOD;
       insAct.run(
         p.id, p.nama, orgId, p.penyelenggara, p.color, p.emoji, p.deskripsi,
-        p.usia_min, p.usia_max, p.lokasiNama, p.area, p.tanggal, p.jam, p.biaya, p.link,
+        p.usia_min, p.usia_max, p.lokasiNama, p.area, p.tanggal, p.jam, p.biaya, p.link, p.mediaUrl || null,
         p.lat ?? null, p.lng ?? null, p.x ?? null, p.y ?? null,
         ex.daftar ? 1 : 0, ex.rutin ? 1 : 0, ex.kontak || null,
         win[0], win[1]

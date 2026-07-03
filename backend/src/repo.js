@@ -43,6 +43,7 @@ function toDTO(row) {
     jam: row.jam,
     biaya: row.biaya,
     link: row.link,
+    mediaUrl: row.media_url,
     lat: row.lat,
     lng: row.lng,
     x: row.map_x,
@@ -184,8 +185,8 @@ const err = (status, message) => Object.assign(new Error(message), { status });
 
 const wOrg = db.prepare('INSERT OR REPLACE INTO organizer (id,nama,instansi,kontak) VALUES (?,?,?,?)');
 const wAct = db.prepare(`INSERT OR REPLACE INTO activity
-  (id,nama,penyelenggara_id,penyelenggara,color,emoji,deskripsi,usia_min,usia_max,lokasi_nama,area,tanggal,jam,biaya,link,lat,lng,map_x,map_y,perlu_daftar,rutin,kontak_wa,window_mulai,window_selesai)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  (id,nama,penyelenggara_id,penyelenggara,color,emoji,deskripsi,usia_min,usia_max,lokasi_nama,area,tanggal,jam,biaya,link,media_url,lat,lng,map_x,map_y,perlu_daftar,rutin,kontak_wa,window_mulai,window_selesai)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 const dCat = db.prepare('DELETE FROM activity_category WHERE activity_id = ?');
 const dOcc = db.prepare('DELETE FROM occurrence WHERE activity_id = ?');
 const dTier = db.prepare('DELETE FROM ticket_tier WHERE activity_id = ?');
@@ -216,7 +217,7 @@ function writeActivity(id, p) {
     wOrg.run(orgId, p.penyelenggara || '', p.penyelenggara || '', p.kontak || null);
     wAct.run(
       id, p.nama, orgId, p.penyelenggara || '', p.color || '#F15A22', p.emoji || '📍', p.deskripsi || '',
-      +p.usia_min, +p.usia_max, p.lokasiNama || '', p.area || '', p.tanggal || '', p.jam || '', p.biaya || 'gratis', p.link || '',
+      +p.usia_min, +p.usia_max, p.lokasiNama || '', p.area || '', p.tanggal || '', p.jam || '', p.biaya || 'gratis', p.link || '', p.mediaUrl || null,
       +p.lat, +p.lng, p.x ?? null, p.y ?? null,
       p.perlu_daftar ? 1 : 0, p.rutin ? 1 : 0, p.kontak || null, win[0], win[1]
     );
@@ -316,4 +317,45 @@ export function deleteCurator(id) {
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   return { deleted: id };
+}
+
+const wAnalytics = db.prepare('INSERT INTO analytics_event (type, activity_id, plan_size) VALUES (?,?,?)');
+
+export function recordAnalytics({ type, activityId = null, planSize = null } = {}) {
+  const allowed = new Set(['view', 'plan_add', 'favorite', 'share', 'reminder']);
+  if (!allowed.has(type)) throw err(400, 'invalid_analytics_type');
+  wAnalytics.run(type, activityId || null, Number.isFinite(+planSize) ? +planSize : null);
+  return { ok: true };
+}
+
+// Public social-proof counts: how many times each activity was added to a plan
+// in the last `days` days. Only ids + counts — no event rows leave the server.
+export function popularActivities({ days = 7 } = {}) {
+  return db.prepare(`
+    SELECT activity_id id, COUNT(*) plans
+    FROM analytics_event
+    WHERE type = 'plan_add' AND activity_id IS NOT NULL
+      AND created_at >= datetime('now', ?)
+    GROUP BY activity_id
+    ORDER BY plans DESC
+  `).all(`-${Math.max(1, Math.min(90, +days || 7))} days`);
+}
+
+export function analyticsSummary() {
+  const events = db.prepare('SELECT type, COUNT(*) count FROM analytics_event GROUP BY type ORDER BY count DESC').all();
+  const topActivities = db.prepare(`
+    SELECT activity_id id, type, COUNT(*) count
+    FROM analytics_event
+    WHERE activity_id IS NOT NULL
+    GROUP BY activity_id, type
+    ORDER BY count DESC
+    LIMIT 20
+  `).all().map(r => ({ ...r, nama: getActivity(r.id)?.nama || r.id }));
+  const totals = db.prepare(`
+    SELECT
+      COUNT(*) total,
+      COUNT(CASE WHEN created_at >= datetime('now','-7 days') THEN 1 END) last7
+    FROM analytics_event
+  `).get();
+  return { totals, events, topActivities };
 }

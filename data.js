@@ -74,8 +74,19 @@ export const EXTRA = {
   museum:   { rutin:true,  daftar:false, kontak:'0811-2026-713', transport:['🚆 Stasiun Jakarta Kota (KRL) · 300 m','🚌 TransJakarta — Halte Kota · 350 m'] }
 };
 
+// Warna identitas per KATEGORI — satu-satunya sumber warna kategori di frontend.
+// Kegiatan mewarisi warna dari kategori pertamanya (catColorOf di logic.js),
+// bukan dari kolom `color` per-item, biar dua kegiatan sekategori selalu senada.
+// Semua nilai cukup gelap buat dipakai sebagai teks badge di atas putih.
+export const CAT_COLOR = {
+  festival:'#D6218A', belanja:'#D97706', memasak:'#B45309', olahraga:'#1C5DDC',
+  seni:'#7B3FE4', pertunjukan:'#7B3FE4', budaya:'#B45309', musik:'#A21CAF',
+  film:'#1F2937', alam:'#178A4C', gaming:'#0D9488', museum:'#78716C',
+  literasi:'#0E7490', coding:'#4F46E5', sains:'#4F46E5',
+};
+
 // Landing page category showcase: [label, emoji, color].
-export const CATPALETTE = [['Festival','🎡','#E6298E'],['Belanja','🛍️','#F15A22'],['Olahraga','⚽','#F15A22'],['Seni','🎨','#7B3FE4'],['Musik','🎵','#E6298E'],['Film','🎬','#1A1A2E'],['Alam','🌿','#2FA84F'],['Gaming','🎮','#00A98F'],['Museum','🏛️','#78716C'],['Literasi','📚','#1497C0']];
+export const CATPALETTE = [['Festival','🎡',CAT_COLOR.festival],['Belanja','🛍️',CAT_COLOR.belanja],['Olahraga','⚽',CAT_COLOR.olahraga],['Seni','🎨',CAT_COLOR.seni],['Musik','🎵',CAT_COLOR.musik],['Film','🎬',CAT_COLOR.film],['Alam','🌿',CAT_COLOR.alam],['Gaming','🎮',CAT_COLOR.gaming],['Museum','🏛️',CAT_COLOR.museum],['Literasi','📚',CAT_COLOR.literasi]];
 
 export const MONTH_NAMES = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 export const HARI_NAMES = ['Minggu','Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'];
@@ -99,7 +110,7 @@ export function hydrateActivities(list) {
       id: p.id, nama: p.nama, penyelenggara: p.penyelenggara, kategori: p.kategori || [],
       color: p.color, emoji: p.emoji, deskripsi: p.deskripsi,
       usia_min: p.usia_min, usia_max: p.usia_max, lokasiNama: p.lokasiNama, area: p.area,
-      tanggal: p.tanggal, jam: p.jam, biaya: p.biaya, link: p.link,
+      tanggal: p.tanggal, jam: p.jam, biaya: p.biaya, link: p.link, mediaUrl: p.mediaUrl,
       lat: p.lat, lng: p.lng, x: p.x, y: p.y
     });
     if (p.hariBerlaku) HARI[p.id] = p.hariBerlaku;

@@ -50,3 +50,24 @@ test('detail lookup + metadata endpoints', () => {
   assert.equal(repo.categories().length, 15);
   assert.deepEqual(repo.ageBands().find(b => b.key === 'anak'), { key: 'anak', label: 'Anak', emoji: '🧒', sub: '6–12 thn', min: 6, max: 12 });
 });
+
+test('analytics recording returns admin summary', () => {
+  repo.recordAnalytics({ type: 'view', activityId: 'prj' });
+  repo.recordAnalytics({ type: 'favorite', activityId: 'prj' });
+  repo.recordAnalytics({ type: 'share', planSize: 2 });
+  const s = repo.analyticsSummary();
+  assert.equal(s.totals.total, 3);
+  assert.ok(s.events.some(e => e.type === 'view' && e.count === 1));
+  assert.ok(s.topActivities.some(a => a.id === 'prj' && a.nama === 'Jakarta Fair Kemayoran (PRJ)'));
+});
+
+test('popularActivities counts recent plan_add per activity', () => {
+  repo.recordAnalytics({ type: 'plan_add', activityId: 'gor' });
+  repo.recordAnalytics({ type: 'plan_add', activityId: 'gor' });
+  repo.recordAnalytics({ type: 'plan_add', activityId: 'perpus' });
+  repo.recordAnalytics({ type: 'view', activityId: 'gor' }); // views don't count
+  const pop = repo.popularActivities({ days: 7 });
+  assert.equal(pop[0].id, 'gor');
+  assert.equal(pop[0].plans, 2);
+  assert.ok(pop.some(r => r.id === 'perpus' && r.plans === 1));
+});

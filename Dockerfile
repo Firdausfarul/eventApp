@@ -5,7 +5,7 @@ FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Only the runtime static assets (keeps the image small; backend stays out).
-COPY index.html app.js logic.js data.js config.js styles.css pola.svg /usr/share/nginx/html/
+COPY index.html app.js logic.js data.js config.js styles.css pola.svg gigi.svg tumpal.svg tumpal-putih.svg tegel.svg favicon.svg logo.svg og-image.png /usr/share/nginx/html/
 COPY admin.html admin.js admin.css /usr/share/nginx/html/
 COPY vendor /usr/share/nginx/html/vendor
 

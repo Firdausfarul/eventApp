@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="40" viewBox="0 0 44 40">
+  <!-- "Tumpal": the nested-triangle motif from batik Betawi (and ondel-ondel
+       sashes), reduced to a whisper-quiet ink line texture for cream grounds. -->
+  <g fill="none" stroke="#1A1320" stroke-opacity=".06" stroke-width="1.3">
+    <polygon points="3,38 22,3 41,38"/>
+    <polygon points="13,38 22,21.5 31,38"/>
+  </g>
+</svg>

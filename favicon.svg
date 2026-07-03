@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="10" fill="#FC351C"/>
+  <!-- magnifying glass: ring + handle, searching -->
+  <circle cx="25" cy="25" r="13" fill="none" stroke="#fff" stroke-width="5.5"/>
+  <line x1="34.5" y1="34.5" x2="45" y2="45" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+  <!-- classic map pin sitting inside the lens: head + tail + punched hole -->
+  <circle cx="25" cy="21" r="5" fill="#fff"/>
+  <path d="M 21 24 L 29 24 L 25 32.5 Z" fill="#fff"/>
+  <circle cx="25" cy="21" r="1.9" fill="#FC351C"/>
+</svg>

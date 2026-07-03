@@ -11,7 +11,7 @@ const root = document.getElementById('admin');
 let auth = localStorage.getItem(AUTH_KEY) || null;
 let list = [], cats = [], selectedId = null, map = null, marker = null;
 // Curator console state.
-let curators = [], curSelectedId = null, currentView = 'activities';
+let curators = [], curSelectedId = null, currentView = 'activities', analytics = null;
 
 // ── api ──────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -64,12 +64,14 @@ function tabsHtml(active) {
   return `<div class="admin-tabs">
     <button id="tab-act" class="tab${active === 'activities' ? ' active' : ''}">🎫 Kegiatan</button>
     <button id="tab-cur" class="tab${active === 'curators' ? ' active' : ''}">✨ Kurator</button>
+    <button id="tab-ana" class="tab${active === 'analytics' ? ' active' : ''}">📊 Insight</button>
   </div>`;
 }
 function wireTabs() {
-  const a = document.getElementById('tab-act'), c = document.getElementById('tab-cur');
+  const a = document.getElementById('tab-act'), c = document.getElementById('tab-cur'), n = document.getElementById('tab-ana');
   if (a) a.onclick = () => { currentView = 'activities'; renderShell(); renderList(); };
   if (c) c.onclick = () => { currentView = 'curators'; renderCuratorShell(); renderCuratorList(); };
+  if (n) n.onclick = () => { currentView = 'analytics'; renderAnalyticsShell(); loadAnalytics(); };
 }
 
 // ── app shell ──────────────────────────────────────────────────────────────
@@ -80,7 +82,7 @@ function renderShell() {
   root.innerHTML = `
   <div class="admin-shell">
     <div class="admin-bar">
-      <div class="brand"><span class="logo">+</span><span class="title">Admin · Internacia Jakarta</span></div>
+      <div class="brand"><img class="logo" src="./favicon.svg" alt=""><span class="title">Admin · Internacia Jakarta</span></div>
       ${tabsHtml('activities')}
       <div style="display:flex;align-items:center;gap:12px">
         <a class="btn btn-pill" style="padding:8px 14px;font-size:13px;text-decoration:none" href="./index.html" target="_blank">Lihat situs ↗</a>
@@ -131,6 +133,7 @@ function renderShell() {
           <div class="fld"><label>Kontak WA</label><input id="f-kontak" class="input" placeholder="0811-2026-700"></div>
         </div>
         <div class="fld"><label>Link</label><input id="f-link" class="input" placeholder="https://jakarta.go.id"></div>
+        <div class="fld"><label>Media URL</label><input id="f-mediaUrl" class="input" placeholder="https://.../foto-kegiatan.jpg"><div class="hint">Opsional. Dipakai sebagai foto kartu dan detail kegiatan.</div></div>
 
         <div class="fld"><label>Hari berlaku</label><div class="days" id="days">${dayBoxes}</div></div>
         <div class="grid2">
@@ -196,7 +199,7 @@ function fillForm(a) {
   setVal('f-usia_min', a?.usia_min ?? 6); setVal('f-usia_max', a?.usia_max ?? 99);
   setVal('f-lokasiNama', a?.lokasiNama); setVal('f-area', a?.area);
   setVal('f-tanggal', a?.tanggal); setVal('f-jam', a?.jam); setVal('f-biaya', a?.biaya || 'gratis');
-  setVal('f-kontak', a?.kontak); setVal('f-link', a?.link);
+  setVal('f-kontak', a?.kontak); setVal('f-link', a?.link); setVal('f-mediaUrl', a?.mediaUrl);
   setVal('f-wmulai', a?.window?.mulai || '2026-06-01'); setVal('f-wselesai', a?.window?.selesai || '2026-07-31');
   setChk('f-perlu_daftar', a?.perlu_daftar); setChk('f-rutin', a?.rutin);
   setVal('f-tiket', (a?.tiket || []).map(t => `${t[0]}|${t[1]}`).join('\n'));
@@ -236,6 +239,7 @@ function readForm() {
     biaya: document.getElementById('f-biaya').value.trim() || 'gratis',
     kontak: document.getElementById('f-kontak').value.trim(),
     link: document.getElementById('f-link').value.trim(),
+    mediaUrl: document.getElementById('f-mediaUrl').value.trim(),
     lat: parseFloat(document.getElementById('f-lat').value),
     lng: parseFloat(document.getElementById('f-lng').value),
     hariBerlaku: [...document.querySelectorAll('input[name=dow]:checked')].map(c => +c.value),
@@ -303,7 +307,7 @@ function renderCuratorShell() {
   root.innerHTML = `
   <div class="admin-shell">
     <div class="admin-bar">
-      <div class="brand"><span class="logo">+</span><span class="title">Admin · Internacia Jakarta</span></div>
+      <div class="brand"><img class="logo" src="./favicon.svg" alt=""><span class="title">Admin · Internacia Jakarta</span></div>
       ${tabsHtml('curators')}
       <div style="display:flex;align-items:center;gap:12px">
         <a class="btn btn-pill" style="padding:8px 14px;font-size:13px;text-decoration:none" href="./index.html" target="_blank">Lihat situs ↗</a>
@@ -441,6 +445,58 @@ async function delCurator() {
   if (res.ok) { toast('Dihapus.'); curSelectedId = null; await loadData(); renderCuratorList(); fillCuratorForm(null); }
   else if (res.status === 401) { toast('Sesi habis, login lagi.', true); logout(); }
   else toast('Gagal hapus.', true);
+}
+
+// ── analytics console ─────────────────────────────────────────────────────
+function renderAnalyticsShell() {
+  root.innerHTML = `
+  <div class="admin-shell">
+    <div class="admin-bar">
+      <div class="brand"><img class="logo" src="./favicon.svg" alt=""><span class="title">Admin · Internacia Jakarta</span></div>
+      ${tabsHtml('analytics')}
+      <div style="display:flex;align-items:center;gap:12px">
+        <a class="btn btn-pill" style="padding:8px 14px;font-size:13px;text-decoration:none" href="./index.html" target="_blank">Lihat situs ↗</a>
+        <button id="logout" class="btn btn-ghost" style="font-size:13px">Keluar</button>
+      </div>
+    </div>
+    <div class="analytics-page">
+      <div class="lc-head"><h2>Insight penggunaan</h2><button id="ana-refresh" class="btn btn-primary" style="padding:8px 14px;font-size:13px">Refresh</button></div>
+      <div id="analytics-view" class="analytics-view">Memuat...</div>
+    </div>
+  </div>`;
+  document.getElementById('logout').onclick = logout;
+  document.getElementById('ana-refresh').onclick = loadAnalytics;
+  wireTabs();
+}
+
+function renderAnalytics() {
+  const el = document.getElementById('analytics-view');
+  if (!el) return;
+  if (!analytics) { el.textContent = 'Belum ada data.'; return; }
+  const labels = { view: 'Detail dilihat', plan_add: 'Masuk rencana', favorite: 'Difavoritkan', share: 'Dibagikan', reminder: 'Reminder' };
+  const ev = analytics.events || [];
+  const top = analytics.topActivities || [];
+  el.innerHTML = `
+    <div class="metric-grid">
+      <div class="metric"><span>Total event</span><b>${analytics.totals?.total || 0}</b></div>
+      <div class="metric"><span>7 hari terakhir</span><b>${analytics.totals?.last7 || 0}</b></div>
+      ${ev.map(e => `<div class="metric"><span>${labels[e.type] || esc(e.type)}</span><b>${e.count}</b></div>`).join('')}
+    </div>
+    <div class="insight-card">
+      <h3>Aktivitas teratas</h3>
+      ${top.length ? top.map(a => `<div class="insight-row"><span>${esc(a.nama)}</span><b>${labels[a.type] || esc(a.type)} · ${a.count}</b></div>`).join('') : '<p>Belum ada interaksi yang tercatat.</p>'}
+    </div>`;
+}
+
+async function loadAnalytics() {
+  const res = await api(`/admin/analytics?_=${Date.now()}`).catch(() => null);
+  if (!res || !res.ok) {
+    analytics = null;
+    renderAnalytics();
+    return toast('Gagal memuat analytics.', true);
+  }
+  analytics = await res.json();
+  renderAnalytics();
 }
 
 // ── boot ────────────────────────────────────────────────────────────────────
