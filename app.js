@@ -28,8 +28,7 @@ const DEFAULT_STATE = {
   ageGroup: 'all', interests: [], location: '',
   filterOpen: false, selectedId: null, detailId: null, query: '',
   plan: [], planOpen: false, when: 'all', calMonth: 5, calDay: null, calEnd: null,
-  viewMode: 'list', // mobile list/map toggle
-  sheet: 'peek',    // mobile map-first results: 'peek' (carousel) | 'full' (list)
+  viewMode: 'list', // mobile results view: 'list' (card feed, default) | 'map'
   curatorId: null,  // active curator "persona" filter (transient)
   cardStyle: 'Detailed', heroStyle: 'Bold',
   favorites: [],
@@ -485,8 +484,6 @@ const App = {
   onSearch(v) { setState({ query: v }); },
   clearQuery() { setState({ query: '' }); },
   setView(v) { setState({ viewMode: v }); },
-  toggleSheet() { setState({ sheet: state.sheet === 'full' ? 'peek' : 'full' }); },
-  setSheet(v) { if (state.sheet !== v) setState({ sheet: v }); },
   toggleFavorite(id) {
     const favorites = state.favorites.includes(id) ? state.favorites.filter(x => x !== id) : [...state.favorites, id];
     if (!state.favorites.includes(id)) track('favorite', id);
@@ -1847,9 +1844,12 @@ function ensureMapEl() {
 function markerIcon(p, selected, count = 1) {
   const cls = 'marker' + (count > 1 ? ' group' : '') + (selected ? ' sel' : '');
   const style = `background:${catColorOf(p)}` + (selected ? ';animation:ldj-pulse 1.6s infinite' : '');
+  // Name chip under every pin: a colored diamond alone says nothing — the map
+  // has to be readable without a legend or a tap.
+  const label = count > 1 ? `${count} kegiatan` : p.nama;
   return L.divIcon({
     className: '', // wrapper has no class so our box-model isn't overridden
-    html: `<button class="${cls}" title="${esc(p.nama)}" style="${style}"><span>${count > 1 ? count : p.emoji}</span></button>`,
+    html: `<div class="mwrap"><button class="${cls}" title="${esc(p.nama)}" style="${style}"><span>${count > 1 ? count : p.emoji}</span></button><span class="mlabel${selected ? ' sel' : ''}">${esc(label)}</span></div>`,
     iconSize: [34, 34], iconAnchor: [17, 34]
   });
 }
@@ -1916,11 +1916,13 @@ function clusterMarkerGroups(groups) {
 
 function drawTransitLines() {
   transitLayer.clearLayers();
+  // Rail lines are orientation context, not content — drawn thin and faded so
+  // the event pins (the actual subject) sit on top of them, not under them.
   TRANSIT_LINES.forEach((line) => {
     L.polyline(line.points, {
       color: '#fff',
-      weight: line.weight + 5,
-      opacity: 1,
+      weight: Math.max(line.weight - 3, 3) + 3,
+      opacity: .75,
       interactive: false,
       pane: 'transitPane',
       lineCap: 'round',
@@ -1929,8 +1931,8 @@ function drawTransitLines() {
     }).addTo(transitLayer);
     L.polyline(line.points, {
       color: line.color,
-      weight: line.weight,
-      opacity: 1,
+      weight: Math.max(line.weight - 3, 3),
+      opacity: .55,
       interactive: false,
       pane: 'transitPane',
       lineCap: 'round',
@@ -2070,16 +2072,14 @@ function wireGjk() {
     t0 = null;
   }, { passive: true });
 
-  // Grip: tap toggles (onclick); a committed vertical drag also works.
+  // Grip: tap (onclick) or a committed upward drag returns to the card feed.
   const grip = document.getElementById('gjk-grip');
   if (grip) {
     let g0 = null;
     grip.addEventListener('touchstart', (e) => { g0 = e.touches[0].clientY; }, { passive: true });
     grip.addEventListener('touchend', (e) => {
       if (g0 == null) return;
-      const dy = e.changedTouches[0].clientY - g0;
-      if (dy < -40) App.setSheet('full');
-      else if (dy > 40) App.setSheet('peek');
+      if (e.changedTouches[0].clientY - g0 < -40) App.setView('list');
       g0 = null;
     }, { passive: true });
   }
@@ -2217,17 +2217,70 @@ function wizard() {
   </div>`;
 }
 
-// Phone results: Gojek-style map-first screen. The map IS the screen; search +
-// chips float on top as MENOR "paper" (ink border, hard yellow shadow), and a
-// bottom sheet holds a snap-x karcis carousel (peek) or the full list (full).
-// Gestures are wired post-render in wireGjk().
-function hasilMobile() {
-  const curator = state.curatorId ? findCurator(state.curatorId) : null;
-  const programs = visiblePrograms(curator);
+// Shared floating top bar for both phone results views: home + search + filter
+// as MENOR "paper" (ink border, hard yellow shadow), chip rail below.
+function gjkTop(curator) {
   const whenOpts = [['all', 'Kapan aja'], ['today', 'Hari ini'], ['tomorrow', 'Besok'], ['weekend', 'Akhir pekan']];
   const whenChips = whenOpts.map(([k, l]) =>
     `<button class="chip${state.when === k ? ' active' : ''}" onclick="App.setWhen('${k}')">${l}</button>`).join('');
+  return `
+  <div class="gjk-top">
+    <div class="gjk-bar">
+      <button class="gjk-sq" title="Beranda" onclick="App.backHome()"><img src="/favicon.svg" alt=""></button>
+      <div class="search gjk-search">
+        <span class="lead-icon">${ic('search')}</span>
+        <input id="hasil-search" type="text" value="${esc(state.query)}" placeholder="Cari kegiatan atau lokasi..." oninput="App._input(this);App.onSearch(this.value)">
+        ${state.query ? `<button class="clear" onclick="App.clearQuery()">✕</button>` : ''}
+      </div>
+      <button class="gjk-sq" title="Filter" onclick="App.openFilter()">${ic('filter')}</button>
+    </div>
+    ${curator
+      ? `<div class="gjk-chips"><button class="chip gjk-curchip" style="--accent:${curator.accent || '#FC351C'}" onclick="App.clearCurator()">${curator.emoji || '⭐'} Kurasi ${esc(curator.nama)} ✕</button></div>`
+      : `<div class="gjk-chips">
+          ${whenChips}
+          <button class="chip${state.freeOnly ? ' active' : ''}" onclick="App.toggleFreeOnly()">Gratis</button>
+          <button class="chip${state.transportOnly ? ' active' : ''}" onclick="App.toggleTransportOnly()">${ic('transit')} Dekat transit</button>
+          <button class="chip gold${state.favoritesOnly ? ' active' : ''}" onclick="App.toggleFavoritesOnly()">${ic('star')} Favorit (${state.favorites.length})</button>
+        </div>`}
+  </div>`;
+}
 
+// Phone results, default view: card feed. Event discovery starts from "what's
+// on this weekend", not coordinates — so the list leads and the map is one tap
+// away (FAB). Filter chips keep their spot at the top in both views.
+function hasilFeed(curator, programs) {
+  const cards = programs.length
+    ? programs.map(p => compactCard(p)).join('')
+    : `<div class="empty"><div class="big">${ic('search')}</div><div class="t">Belum ada yang cocok</div>
+        <div style="font-size:14px;margin-bottom:16px">Coba kata kunci lain, ganti kelompok usia, atau pilih minat lain di Filter.</div>
+        <button class="btn btn-primary" style="padding:11px 24px;font-size:14px" onclick="App.openFilter()">Buka Filter</button></div>`;
+  return `
+  <div class="screen feed-screen">
+    ${gjkTop(curator)}
+    <div class="feed-body">
+      ${curator ? `
+      <div class="cur-banner" style="--accent:${curator.accent || '#FC351C'}">
+        <span class="cb-emoji">${curator.emoji || '⭐'}</span>
+        <div class="cb-text">
+          <div class="cb-name">Kurasi ${esc(curator.nama)}</div>
+          ${curator.bio ? `<div class="cb-bio">${esc(curator.bio)}</div>` : ''}
+        </div>
+        <button class="cb-share" onclick="App.shareCurator()">📤 Bagikan kartu</button>
+        <button class="cb-clear" onclick="App.clearCurator()">✕ Semua kegiatan</button>
+      </div>` : `<p class="feed-count"><b>${programs.length}</b> kegiatan ditemukan${state.query ? ` · “${esc(state.query)}”` : ''}</p>`}
+      <div class="cards">
+        ${cards}
+        <div class="disclaimer"><strong>Catatan:</strong> Jadwal dapat berubah — selalu konfirmasi ke penyelenggara sebelum datang. Bantuan aksesibilitas: <strong>1500-177</strong>.</div>
+      </div>
+    </div>
+    <button class="map-fab" onclick="App.setView('map')">${ic('map')} Peta</button>
+  </div>`;
+}
+
+// Phone results, secondary view: Gojek-style map. Full-viewport draggable map,
+// snap-x karcis carousel at the bottom (centered card = selected pin, swipe up
+// on a card = its detail). Grip returns to the feed. Wired in wireGjk().
+function hasilMap(curator, programs) {
   const carousel = programs.length
     ? programs.map(gCard).join('')
     : `<article class="gcard gcard-empty">
@@ -2237,59 +2290,27 @@ function hasilMobile() {
           <button class="btn btn-primary" style="margin-top:10px;padding:9px 16px;font-size:13px" onclick="event.stopPropagation();App.openFilter()">Buka Filter</button>
         </div>
       </article>`;
-
-  const fullList = `
-    ${curator ? `
-    <div class="cur-banner" style="--accent:${curator.accent || '#FC351C'}">
-      <span class="cb-emoji">${curator.emoji || '⭐'}</span>
-      <div class="cb-text">
-        <div class="cb-name">Kurasi ${esc(curator.nama)}</div>
-        ${curator.bio ? `<div class="cb-bio">${esc(curator.bio)}</div>` : ''}
-      </div>
-      <button class="cb-share" onclick="App.shareCurator()">📤 Bagikan kartu</button>
-      <button class="cb-clear" onclick="App.clearCurator()">✕ Semua kegiatan</button>
-    </div>` : ''}
-    <div class="cards">
-      ${programs.map(p => compactCard(p)).join('')}
-      <div class="disclaimer"><strong>Catatan:</strong> Jadwal dapat berubah — selalu konfirmasi ke penyelenggara sebelum datang. Bantuan aksesibilitas: <strong>1500-177</strong>.</div>
-    </div>`;
-
   return `
   <div class="screen gjk-screen">
     <div class="gjk">
       <div class="result-map gjk-map"><div id="map-slot"></div></div>
-
-      <div class="gjk-top">
-        <div class="gjk-bar">
-          <button class="gjk-sq" title="Beranda" onclick="App.backHome()"><img src="/favicon.svg" alt=""></button>
-          <div class="search gjk-search">
-            <span class="lead-icon">${ic('search')}</span>
-            <input id="hasil-search" type="text" value="${esc(state.query)}" placeholder="Cari kegiatan atau lokasi..." oninput="App._input(this);App.onSearch(this.value)">
-            ${state.query ? `<button class="clear" onclick="App.clearQuery()">✕</button>` : ''}
-          </div>
-          <button class="gjk-sq" title="Filter" onclick="App.openFilter()">${ic('filter')}</button>
-        </div>
-        ${curator
-          ? `<div class="gjk-chips"><button class="chip gjk-curchip" style="--accent:${curator.accent || '#FC351C'}" onclick="App.clearCurator()">${curator.emoji || '⭐'} Kurasi ${esc(curator.nama)} ✕</button></div>`
-          : `<div class="gjk-chips">
-              ${whenChips}
-              <button class="chip${state.freeOnly ? ' active' : ''}" onclick="App.toggleFreeOnly()">Gratis</button>
-              <button class="chip${state.transportOnly ? ' active' : ''}" onclick="App.toggleTransportOnly()">${ic('transit')} Dekat transit</button>
-              <button class="chip gold${state.favoritesOnly ? ' active' : ''}" onclick="App.toggleFavoritesOnly()">${ic('star')} Favorit (${state.favorites.length})</button>
-            </div>`}
-      </div>
-
-      <div class="gjk-sheet" data-mode="${state.sheet}">
-        <button class="gjk-grip" id="gjk-grip" onclick="App.toggleSheet()">
+      ${gjkTop(curator)}
+      <div class="gjk-sheet">
+        <button class="gjk-grip" id="gjk-grip" onclick="App.setView('list')">
           <span class="gg-pill"></span>
           <span class="gg-label"><b>${programs.length}</b> kegiatan${state.query ? ` · “${esc(state.query)}”` : ''}</span>
-          <span class="gg-cue">${state.sheet === 'full' ? 'Peta ⌄' : 'Semua ⌃'}</span>
+          <span class="gg-cue">${ic('list')} Daftar</span>
         </button>
         <div class="gjk-carousel" id="gjk-carousel">${carousel}</div>
-        <div class="gjk-list">${fullList}</div>
       </div>
     </div>
   </div>`;
+}
+
+function hasilMobile() {
+  const curator = state.curatorId ? findCurator(state.curatorId) : null;
+  const programs = visiblePrograms(curator);
+  return state.viewMode === 'map' ? hasilMap(curator, programs) : hasilFeed(curator, programs);
 }
 
 function hasil() {

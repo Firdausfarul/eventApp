@@ -242,7 +242,7 @@ button { font-family: inherit; }
 #ldj-map .leaflet-tile-pane { filter: saturate(.5) contrast(.92); }
 #ldj-map .leaflet-transit-pane { z-index: 520; pointer-events: none; }
 #ldj-map .leaflet-transit-pane path { stroke-linecap: round; stroke-linejoin: round; }
-#ldj-map .leaflet-station-pane { z-index: 540; pointer-events: none; }
+#ldj-map .leaflet-station-pane { z-index: 540; pointer-events: none; opacity: .7; }
 #ldj-map .leaflet-station-pane path { vector-effect: non-scaling-stroke; }
 /* pin popup — brand-styled Leaflet popup */
 #ldj-map .leaflet-container, #ldj-map .leaflet-popup-content { font-family: inherit; }
@@ -262,7 +262,12 @@ button { font-family: inherit; }
 .marker.sel { transform: rotate(-45deg) scale(1.2); }
 .marker > span { display: block; transform: rotate(45deg); font-size: 17px; line-height: 1; }
 .marker.group > span { font-size: 14px; font-weight: 900; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.45); }
-.transit-label { display: inline-flex; align-items: center; justify-content: center; min-width: 42px; height: 22px; padding: 0 8px; border: 1.5px solid currentColor; border-radius: 3px; background: #fff; color: var(--line); font-size: 11px; font-weight: 900; line-height: 1; box-shadow: 0 2px 8px rgba(21,22,27,.2); pointer-events: none; }
+/* Name chip under each pin — the map must read without a legend. */
+.mwrap { position: relative; width: 34px; height: 34px; }
+.mlabel { position: absolute; top: 38px; left: 50%; transform: translateX(-50%); max-width: 104px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: rgba(255,255,255,.95); border: 1px solid rgba(21,22,27,.5); border-radius: var(--r-xs); padding: 2px 6px; font-size: 9.5px; font-weight: 800; color: var(--ink); pointer-events: none; box-shadow: 0 1px 4px rgba(21,22,27,.18); }
+.mlabel.sel { background: var(--brand); border-color: var(--brand-hi); color: #fff; }
+/* Rail chrome is context, not content — chips and dots sit back so event pins lead. */
+.transit-label { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; height: 19px; padding: 0 7px; border: 1px solid currentColor; border-radius: 3px; background: rgba(255,255,255,.85); color: var(--line); font-size: 9.5px; font-weight: 900; line-height: 1; box-shadow: none; pointer-events: none; opacity: .85; }
 /* legend + zoom-out float above Leaflet panes (which top out around z 700) */
 .map-legend { position: absolute; left: 14px; bottom: 14px; z-index: 800; background: rgba(255,255,255,.94); border: 1.5px solid var(--cream-deep); border-radius: 4px; padding: 10px 13px; font-size: 11px; font-weight: 800; color: var(--ink-blue); display: flex; align-items: center; gap: 8px; backdrop-filter: blur(4px); box-shadow: 0 4px 14px rgba(21,22,27,.13); }
 .map-legend .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--brand); }
@@ -665,21 +670,9 @@ button { font-family: inherit; }
   .cal-cell button { padding: 3px 2px; }
   .cal-cell .cev { font-size: 11px; gap: 1px; }
   .cal-cell .cev b { font-size: 8.5px; }
-  /* Mobile: a compact map on top + the full list below (page scrolls). No
-     full-screen map, no toggle, no empty band — the common mobile pattern. */
+  /* Phone results markup is its own template (hasilFeed/hasilMap in app.js) —
+     the desktop .results split never renders under 821px, so no rules here. */
   .view-toggle { display: none; }
-  .results { flex-direction: column; padding: 12px 16px 16px; gap: 12px; min-height: 0; }
-  .result-map, .result-list { width: 100%; max-width: none; }
-  /* Map pinned on top while the list scrolls under it. Full-bleed (negative
-     margins swallow .results' gutters) so cards can't peek past its sides while
-     stuck. flex reset matters: the desktop `flex:1 1 520px` basis becomes HEIGHT
-     once .results turns into a column, silently overriding any height set here. */
-  .result-map { position: sticky; top: 0; z-index: 5; flex: 0 0 auto; height: 24svh; min-height: 158px; max-height: 210px; display: block; align-self: stretch; margin: -12px -16px 0; border-radius: 0; border: none; border-bottom: 2px solid var(--ink); }
-  /* flex:0 0 auto so the list's real height counts: with the desktop basis
-     (380px) the cards just spill past .results, which silently shrinks the
-     sticky range of the pinned map above. */
-  .result-list { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; }
-  .result-list h1 { font-size: 24px; line-height: 1.08; }
   .when-row, .quick-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 3px; scrollbar-width: none; }
   .when-row::-webkit-scrollbar, .quick-filters::-webkit-scrollbar { display: none; }
   .when-row .chip, .quick-filters .chip { flex: 0 0 auto; min-height: 40px; padding: 9px 14px; white-space: nowrap; }
@@ -742,21 +735,25 @@ button { font-family: inherit; }
 .gjk-chips .chip.active.gold { border-color: var(--ink); }
 .gjk-curchip { border-color: var(--accent, var(--brand)) !important; color: var(--accent, var(--brand)); }
 
-/* Bottom sheet. Peek = transparent strip (map stays pannable around the paper);
-   full = solid panel with the gigi-balang lip, list scrolls inside itself. */
+/* Bottom strip: transparent (map stays pannable around the paper); the grip
+   returns to the card feed, the carousel browses events in place. */
 .gjk-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; display: flex; flex-direction: column; pointer-events: none; }
 .gjk-grip { pointer-events: auto; align-self: center; display: flex; align-items: center; gap: 9px; background: #fff; border: 2px solid var(--ink); border-radius: var(--r-sm); box-shadow: 3px 3px 0 var(--yellow); padding: 7px 14px; margin-bottom: 9px; font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-blue); cursor: pointer; touch-action: none; }
 .gjk-grip .gg-pill { width: 26px; height: 4px; border-radius: 2px; background: var(--ink); opacity: .75; }
 .gjk-grip .gg-label b { color: var(--brand); }
-.gjk-grip .gg-cue { color: var(--brand); font-weight: 800; }
+.gjk-grip .gg-cue { display: inline-flex; align-items: center; gap: 5px; color: var(--brand); font-weight: 800; }
 .gjk-carousel { display: flex; gap: 11px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 4px 14px 14px; pointer-events: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
 .gjk-carousel::-webkit-scrollbar { display: none; }
-.gjk-list { display: none; }
-.gjk-sheet[data-mode="full"] { top: 13svh; background: var(--cream); border-top: 2px solid var(--ink); border-radius: var(--r-lg) var(--r-lg) 0 0; pointer-events: auto; animation: ldj-sheet .28s ease; }
-.gjk-sheet[data-mode="full"] .gjk-carousel { display: none; }
-.gjk-sheet[data-mode="full"] .gjk-grip { align-self: stretch; justify-content: space-between; margin: 0; border: none; border-bottom: 1px solid var(--cream-deep); border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: none; padding: 13px 16px; position: relative; background: #fff; }
-.gjk-sheet[data-mode="full"] .gjk-grip::after { content: ""; position: absolute; left: 0; right: 0; bottom: -11px; height: 11px; background: url(./gigi.svg) repeat-x top left; background-size: auto 11px; z-index: 3; pointer-events: none; }
-.gjk-sheet[data-mode="full"] .gjk-list { display: block; flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 14px calc(14px + env(safe-area-inset-bottom, 0px)); }
+
+/* Card feed: the default phone results view (the map is one FAB tap away).
+   Same paper top bar as the map view, docked sticky instead of floating. */
+.feed-screen { position: relative; }
+.feed-screen .gjk-top { position: sticky; top: 0; z-index: 15; background: var(--cream); border-bottom: 1px solid var(--cream-deep); padding: 10px 12px 0; pointer-events: auto; }
+.feed-body { padding: 12px 16px 8px; }
+.feed-count { margin: 2px 0 12px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
+.feed-count b { color: var(--brand); }
+.map-fab { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(80px + env(safe-area-inset-bottom, 0px)); z-index: 25; display: inline-flex; align-items: center; gap: 8px; background: var(--ink); color: #fff; border: 2px solid var(--ink); border-radius: var(--r-sm); box-shadow: 3px 3px 0 var(--yellow); padding: 11px 20px; font-family: inherit; font-size: 14px; font-weight: 800; cursor: pointer; }
+.map-fab .ico { font-size: 15px; }
 
 /* Karcis card: emoji stub + dashed perforation (echoes .hero-ticket), category
    triangle in the corner (same code as .card::after). Selected = brand shadow. */
