@@ -147,8 +147,9 @@ function renderShell() {
 
         <div class="fld"><label>Tiket — satu per baris: <code>label|harga</code></label>
           <textarea id="f-tiket" class="ta" placeholder="Senin–Jumat|40.000&#10;Sabtu–Minggu & libur|50.000"></textarea></div>
-        <div class="fld"><label>Transport — satu per baris</label>
-          <textarea id="f-transport" class="ta" placeholder="🚌 TransJakarta — Halte Kemayoran · 600 m"></textarea></div>
+        <div class="fld"><label>Transit terdekat — satu per baris</label>
+          <textarea id="f-transport" class="ta" placeholder="🚌 TransJakarta — Halte Kemayoran · 600 m&#10;🚆 KRL — Stasiun Kemayoran · 1,2 km"></textarea>
+          <div class="hint">Metadata manual/kurasi untuk TransJakarta, MRT, LRT, KRL, JakLingko, atau catatan jalan kaki.</div></div>
         <div class="fld"><label>Sub-acara — heading</label><input id="f-sub-heading" class="input" placeholder="🎬 Film yang diputar"></div>
         <div class="fld"><label>Sub-acara items — satu per baris: <code>nama|meta</code></label>
           <textarea id="f-sub-items" class="ta" placeholder='"Laskar Pelangi"|19.00 · layar utama'></textarea></div>

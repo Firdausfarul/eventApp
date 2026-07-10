@@ -6,11 +6,13 @@
  */
 import express from 'express';
 import cors from 'cors';
+import sharp from 'sharp';
 import {
   listActivities, getActivity, calendar, categories, ageBands, interestsMeta,
   createActivity, updateActivity, deleteActivity,
   listCurators, getCurator, createCurator, updateCurator, deleteCurator,
-  recordAnalytics, analyticsSummary, popularActivities
+  recordAnalytics, analyticsSummary, popularActivities,
+  createSharedPlan, getSharedPlan, planModelFromActivities
 } from './repo.js';
 
 const app = express();
@@ -57,26 +59,23 @@ app.get('/curators/:id', cacheable, (req, res) => {
   res.json(c);
 });
 
-// POST /plan/share — generate a shareable .ics for a set of activity ids.
-// Stateless: builds the calendar payload on the fly (no plan is stored).
+// POST /plan/share — persist a short share link + generate calendar export.
 app.post('/plan/share', (req, res) => {
-  const ids = Array.isArray(req.body?.items) ? req.body.items : [];
-  const acts = ids.map(getActivity).filter(Boolean);
-  if (!acts.length) return res.status(400).json({ error: 'empty_plan' });
-
-  const parseJam = (j) => { const m = String(j).match(/(\d{1,2})\.(\d{2})\D+(\d{1,2})\.(\d{2})/); return m ? { s: +m[1] * 60 + +m[2], e: +m[3] * 60 + +m[4] } : { s: 0, e: 0 }; };
-  const pad = (n) => String(n).padStart(2, '0');
-  const now = new Date();
-  const dt = '' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate());
-  let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//LiburanJKT//ID\r\n';
-  acts.map(a => ({ a, t: parseJam(a.jam) })).sort((x, y) => x.t.s - y.t.s).forEach(({ a, t }) => {
-    ics += 'BEGIN:VEVENT\r\nUID:' + a.id + '-' + dt + '@liburanjkt\r\n' +
-      'DTSTART:' + dt + 'T' + pad(Math.floor(t.s / 60)) + pad(t.s % 60) + '00\r\n' +
-      'DTEND:' + dt + 'T' + pad(Math.floor(t.e / 60)) + pad(t.e % 60) + '00\r\n' +
-      'SUMMARY:' + a.nama + '\r\nLOCATION:' + (a.lokasiNama || a.area) + '\r\nEND:VEVENT\r\n';
-  });
-  ics += 'END:VCALENDAR';
-  res.json({ ics: 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics), count: acts.length });
+  try {
+    const shared = createSharedPlan(Array.isArray(req.body?.items) ? req.body.items : []);
+    const origin = pageOrigin(req);
+    const appUrl = `${origin}/?plan=${encodeURIComponent(shared.ids.join(','))}`;
+    res.status(201).json({
+      id: shared.id,
+      url: `${origin}/s/p/${shared.id}`,
+      appUrl,
+      ogImage: `${origin}/og/plan/${shared.id}.png`,
+      count: shared.plan.count,
+      ics: shared.ics
+    });
+  } catch (e) {
+    res.status(e.status || 400).json({ error: e.message });
+  }
 });
 
 app.post('/analytics', (req, res) => {
@@ -99,7 +98,7 @@ const pageOrigin = (req) => {
 };
 // `redirect`: URL humans get bounced to (crawlers only read the OG tags).
 // Omit it (digest) and the page itself is the destination.
-const sharePage = ({ origin, title, desc, appUrl, bodyHtml, redirect = null }) => `<!doctype html>
+const sharePage = ({ origin, title, desc, appUrl, bodyHtml, redirect = null, image = null, ogUrl = appUrl }) => `<!doctype html>
 <html lang="id"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escH(title)}</title>
@@ -107,8 +106,8 @@ const sharePage = ({ origin, title, desc, appUrl, bodyHtml, redirect = null }) =
 <meta property="og:site_name" content="Internacia Jakarta">
 <meta property="og:title" content="${escH(title)}">
 <meta property="og:description" content="${escH(desc)}">
-<meta property="og:image" content="${origin}/og-image.png">
-<meta property="og:url" content="${escH(appUrl)}">
+<meta property="og:image" content="${escH(image || `${origin}/og-image.png`)}">
+<meta property="og:url" content="${escH(ogUrl)}">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="description" content="${escH(desc)}">
 <style>
@@ -129,6 +128,136 @@ ${redirect ? `<script>/* humans go straight to the app; crawlers read the OG tag
 if (!/bot|crawler|spider|whatsapp|telegram|facebook|preview/i.test(navigator.userAgent)) location.replace(${JSON.stringify(redirect)});
 </script>` : ''}</body></html>`;
 
+const planBodyHtml = (title, subtitle, plan) => `
+  <h1>${escH(title)}</h1>
+  <p class="sub">${escH(subtitle)}</p>
+  <ul>${plan.events.map((a) => `<li>${escH(a.emoji)} ${escH(a.nama)}<small>${escH(a.jam)} · ${escH(a.lokasiNama || a.area)} · ${escH(plan.feeLabel(a))}</small></li>`).join('')}</ul>`;
+
+function wrapSvgText(text, maxChars, maxLines = 2) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const next = line ? line + ' ' + w : w;
+    if (next.length > maxChars && line) { lines.push(line); line = w; }
+    else line = next;
+    if (lines.length === maxLines) break;
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+  if (words.join(' ').length > lines.join(' ').length && lines.length) lines[lines.length - 1] = lines[lines.length - 1].replace(/…?$/, '') + '…';
+  return lines;
+}
+
+function planOgSvg(shared) {
+  const plan = shared.plan;
+  const items = plan.events.slice(0, 3);
+  const font = "'Plus Jakarta Sans', 'Inter', 'Noto Sans', Arial, sans-serif";
+  const rows = items.map((a, i) => {
+    const y = 238 + i * 82;
+    const name = wrapSvgText(a.nama, 24, 1)[0] || a.nama;
+    const accent = a.color || '#FC351C';
+    return `
+      <g>
+        <rect x="690" y="${y - 42}" width="380" height="66" rx="0" fill="#fff" stroke="#1A1320" stroke-width="2"/>
+        <rect x="690" y="${y - 42}" width="10" height="66" fill="${escH(accent)}"/>
+        <rect x="720" y="${y - 22}" width="28" height="28" rx="3" fill="#FC351C"/>
+        <text x="734" y="${y - 1}" text-anchor="middle" font-family="${font}" font-size="16" font-weight="900" fill="#fff">${i + 1}</text>
+        <text x="766" y="${y - 12}" font-family="${font}" font-size="21" font-weight="850" fill="#1A1320">${escH(name)}</text>
+        <text x="766" y="${y + 13}" font-family="${font}" font-size="15" font-weight="750" fill="#7A6558">${escH(a.jam)} · ${escH(a.area)}</text>
+      </g>`;
+  }).join('');
+  const more = plan.events.length > 3 ? `<text x="690" y="504" font-family="${font}" font-size="20" font-weight="850" fill="#FC351C">+${plan.events.length - 3} kegiatan lagi</text>` : '';
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+    <defs>
+      <pattern id="pola" width="240" height="60" patternUnits="userSpaceOnUse">
+        <rect x="0" y="0" width="60" height="60" fill="#FC351C"/>
+        <polygon points="60,0 120,0 90,60" fill="#FEB52B"/>
+        <polygon points="120,60 180,60 150,0" fill="#1FAE5D"/>
+        <rect x="196" y="14" width="32" height="32" fill="#00AAFF"/>
+      </pattern>
+      <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="12" dy="12" stdDeviation="0" flood-color="#FEB52B"/>
+      </filter>
+    </defs>
+    <rect width="1200" height="630" fill="#FFF8F1"/>
+    <path d="M734 0h466v630H492z" fill="#FFE9E4"/>
+    <circle cx="1055" cy="122" r="186" fill="#FEB52B" opacity=".55"/>
+    <rect x="0" y="586" width="1200" height="44" fill="url(#pola)"/>
+
+    <g transform="translate(72 58)">
+      <rect x="0" y="0" width="64" height="64" rx="10" fill="#FC351C"/>
+      <circle cx="25" cy="25" r="13" fill="none" stroke="#fff" stroke-width="5.5"/>
+      <line x1="34.5" y1="34.5" x2="45" y2="45" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+      <circle cx="25" cy="21" r="5" fill="#fff"/>
+      <path d="M21 24 L29 24 L25 33 Z" fill="#fff"/>
+      <circle cx="25" cy="21" r="1.9" fill="#FC351C"/>
+      <text x="82" y="38" font-family="${font}" font-weight="900" font-size="30" fill="#1A1320">Internacia Jakarta</text>
+      <text x="82" y="60" font-family="${font}" font-weight="700" font-size="14" letter-spacing=".3" fill="#7A6558">Kegiatan seru, gratis &amp; murah</text>
+    </g>
+
+    <text x="78" y="210" font-family="${font}" font-size="78" font-weight="950" fill="#1A1320">Rencana</text>
+    <text x="78" y="284" font-family="${font}" font-size="78" font-weight="950" fill="#FC351C">Harian</text>
+    <text x="82" y="334" font-family="${font}" font-size="26" font-weight="750" fill="#4A3F3A">Agenda pilihanmu, siap dibagikan.</text>
+
+    <g font-family="${font}">
+      <rect x="82" y="374" width="214" height="72" rx="0" fill="#FFE9E4" stroke="#1A1320" stroke-width="2"/>
+      <text x="106" y="402" font-size="12" font-weight="900" letter-spacing="1.4" fill="#FC351C">JAM</text>
+      <text x="106" y="429" font-size="21" font-weight="900" fill="#1A1320">${escH(plan.dayStart)}-${escH(plan.dayEnd)}</text>
+      <rect x="314" y="374" width="146" height="72" rx="0" fill="#FEB52B" stroke="#1A1320" stroke-width="2"/>
+      <text x="336" y="402" font-size="12" font-weight="900" letter-spacing="1.4" fill="#7A3F00">AGENDA</text>
+      <text x="336" y="429" font-size="21" font-weight="900" fill="#1A1320">${plan.count} kegiatan</text>
+      <rect x="478" y="374" width="158" height="72" rx="0" fill="#E9F7EF" stroke="#1A1320" stroke-width="2"/>
+      <text x="500" y="402" font-size="12" font-weight="900" letter-spacing="1.4" fill="#178A4C">BIAYA</text>
+      <text x="500" y="429" font-size="21" font-weight="900" fill="#1A1320">${escH(plan.totalBiayaLabel)}</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="650" y="162" width="470" height="360" rx="0" fill="#fff" stroke="#1A1320" stroke-width="3"/>
+      <rect x="650" y="462" width="470" height="60" fill="url(#pola)" stroke="#1A1320" stroke-width="3"/>
+    </g>
+    ${rows}
+    ${more}
+  </svg>`;
+}
+
+async function planOgPng(shared) {
+  return sharp(Buffer.from(planOgSvg(shared))).png().toBuffer();
+}
+
+// GET /s/p/:id — DB-backed share link with plan-specific OG image.
+app.get('/s/p/:id', (req, res) => {
+  const shared = getSharedPlan(req.params.id, { countView: true });
+  if (!shared || !shared.plan.count) return res.status(404).send('Plan not found');
+  const origin = pageOrigin(req);
+  const appUrl = `${origin}/?plan=${encodeURIComponent(shared.ids.join(','))}`;
+  const bodyHtml = planBodyHtml(shared.plan.title, 'Rencana harian dari temanmu — cek jadwalnya:', shared.plan);
+  res.set('Cache-Control', 'public, max-age=300');
+  res.send(sharePage({
+    origin,
+    title: shared.plan.title,
+    desc: shared.plan.desc,
+    appUrl,
+    bodyHtml,
+    redirect: appUrl,
+    image: `${origin}/og/plan/${shared.id}.png`,
+    ogUrl: `${origin}/s/p/${shared.id}`
+  }));
+});
+
+// GET /og/plan/:id.png — plan-specific PNG for WhatsApp/Discord unfurls.
+app.get('/og/plan/:id.png', async (req, res) => {
+  const shared = getSharedPlan(req.params.id);
+  if (!shared || !shared.plan.count) return res.status(404).json({ error: 'not_found' });
+  try {
+    const png = await planOgPng(shared);
+    res.set('Cache-Control', 'public, max-age=86400, immutable');
+    res.type('png').send(png);
+  } catch (e) {
+    res.status(500).json({ error: 'og_image_failed' });
+  }
+});
+
 // GET /s/plan?ids=a,b,c — server-rendered unfurl page for a shared day plan.
 // WhatsApp's crawler gets real og:title/description; humans get redirected to
 // the SPA with ?plan= so the plan opens as before.
@@ -138,15 +267,10 @@ app.get('/s/plan', (req, res) => {
   const origin = pageOrigin(req);
   if (!acts.length) return res.redirect(origin + '/');
   const appUrl = `${origin}/?plan=${encodeURIComponent(acts.map((a) => a.id).join(','))}`;
-  const gratis = acts.filter((a) => a.biaya === 'gratis').length;
-  const title = `Rencana seru: ${acts.length} kegiatan di Jakarta${gratis ? ` · ${gratis} gratis` : ''}`;
-  const desc = acts.map((a) => `${a.emoji} ${a.nama} (${a.jam})`).join(' • ');
-  const bodyHtml = `
-  <h1>${escH(title)}</h1>
-  <p class="sub">Rencana harian dari temanmu — cek jadwalnya:</p>
-  <ul>${acts.map((a) => `<li>${escH(a.emoji)} ${escH(a.nama)}<small>${escH(a.jam)} · ${escH(a.lokasiNama || a.area)} · ${a.biaya === 'gratis' ? 'Gratis' : escH('Rp ' + a.biaya)}</small></li>`).join('')}</ul>`;
+  const plan = planModelFromActivities(acts);
+  const bodyHtml = planBodyHtml(plan.title, 'Rencana harian dari temanmu — cek jadwalnya:', plan);
   res.set('Cache-Control', 'public, max-age=300');
-  res.send(sharePage({ origin, title, desc, appUrl, bodyHtml, redirect: appUrl }));
+  res.send(sharePage({ origin, title: plan.title, desc: plan.desc, appUrl, bodyHtml, redirect: appUrl }));
 });
 
 // GET /digest — "Weekend ini di Jakarta": stable, forwardable weekly listicle.
@@ -208,6 +332,8 @@ app.delete('/admin/curators/:id', basicAuth, (req, res) => {
 
 app.get('/admin/analytics', basicAuth, (_req, res) => res.json(analyticsSummary()));
 
-app.listen(PORT, () => console.log(`Internacia Jakarta API on :${PORT}`));
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+  app.listen(PORT, () => console.log(`Internacia Jakarta API on :${PORT}`));
+}
 
 export default app;

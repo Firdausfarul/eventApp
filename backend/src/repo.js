@@ -6,6 +6,7 @@
  *   - geo-sort by Haversine distance from the user's lat/lng (not persisted)
  */
 import { db, init, PERIOD_RANGE, CATEGORIES } from './db.js';
+import { randomBytes } from 'node:crypto';
 import { AGEBANDS, AGEGROUPS, INTERESTS, CATLABEL } from '../../data.js';
 
 init();
@@ -48,6 +49,10 @@ function toDTO(row) {
     lng: row.lng,
     x: row.map_x,
     y: row.map_y,
+    primaryCategory: row.primary_category,
+    timeMode: row.time_mode,
+    visitMinutes: row.visit_minutes,
+    venueId: row.venue_id,
     hariBerlaku: qOcc.all(id).map(o => o.dow),
     window: { mulai: row.window_mulai, selesai: row.window_selesai },
     rutin: !!row.rutin,
@@ -155,6 +160,114 @@ export function interestsMeta() {
   return INTERESTS.map(([label, emoji, kategori]) => ({ label, emoji, kategori }));
 }
 
+// ── shared plans ────────────────────────────────────────────────────────
+const qSharedPlan = db.prepare('SELECT * FROM shared_plan WHERE id = ?');
+const wSharedPlan = db.prepare('INSERT INTO shared_plan (id, items_json) VALUES (?, ?)');
+const wSharedPlanCount = db.prepare('UPDATE shared_plan SET share_count = share_count + 1 WHERE id = ?');
+
+const parseJam = (j) => {
+  const m = String(j).match(/(\d{1,2})\.(\d{2})\D+(\d{1,2})\.(\d{2})/);
+  return m ? { start: +m[1] * 60 + +m[2], end: +m[3] * 60 + +m[4] } : { start: 0, end: 0 };
+};
+const fmtMin = (t) => {
+  const h = Math.floor(t / 60), m = t % 60;
+  return String(h).padStart(2, '0') + '.' + String(m).padStart(2, '0');
+};
+const biayaMin = (p) => {
+  const firstTier = Array.isArray(p.tiket) && p.tiket.length ? p.tiket[0][1] : '';
+  if (firstTier) return parseInt(String(firstTier).replace(/\D/g, ''), 10) || 0;
+  return p.biaya === 'gratis' ? 0 : (parseInt(String(p.biaya).replace(/\D/g, ''), 10) || 0);
+};
+const fmtRp = (n) => n ? ('Rp ' + n.toLocaleString('id-ID')) : 'Gratis';
+const feeLabel = (p) => {
+  const firstTier = Array.isArray(p.tiket) && p.tiket.length ? p.tiket[0][1] : '';
+  return firstTier ? ('Mulai Rp ' + firstTier) : (p.biaya === 'gratis' ? 'Gratis' : ('Rp ' + p.biaya));
+};
+
+function uniqueValidActivities(ids) {
+  const seen = new Set();
+  return (Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || '').trim())
+    .filter((id) => id && !seen.has(id) && seen.add(id))
+    .map(getActivity)
+    .filter(Boolean);
+}
+
+function shortId() {
+  return randomBytes(6).toString('base64url');
+}
+
+export function planModelFromActivities(activities) {
+  const events = activities
+    .map((a) => ({ ...a, t: parseJam(a.jam) }))
+    .sort((a, b) => a.t.start - b.t.start);
+  const totalBiaya = events.reduce((sum, p) => sum + biayaMin(p), 0);
+  const dayStart = events.length ? fmtMin(events[0].t.start) : '';
+  const dayEnd = events.length ? fmtMin(Math.max(...events.map(e => e.t.end))) : '';
+  const gratis = events.filter((a) => a.biaya === 'gratis').length;
+  return {
+    events,
+    ids: events.map((a) => a.id),
+    count: events.length,
+    gratis,
+    totalBiaya,
+    totalBiayaLabel: fmtRp(totalBiaya),
+    dayStart,
+    dayEnd,
+    title: `Rencana seru: ${events.length} kegiatan di Jakarta${gratis ? ` · ${gratis} gratis` : ''}`,
+    desc: events.map((a) => `${a.emoji} ${a.nama} (${a.jam})`).join(' • '),
+    feeLabel
+  };
+}
+
+export function buildPlanIcs(activities) {
+  const plan = planModelFromActivities(activities);
+  const now = new Date(), pad = (n) => String(n).padStart(2, '0');
+  const dt = '' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate());
+  let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//InternaciaJakarta//ID\r\n';
+  plan.events.forEach((a) => {
+    ics += 'BEGIN:VEVENT\r\nUID:' + a.id + '-' + dt + '@internaciajakarta\r\n' +
+      'DTSTART:' + dt + 'T' + pad(Math.floor(a.t.start / 60)) + pad(a.t.start % 60) + '00\r\n' +
+      'DTEND:' + dt + 'T' + pad(Math.floor(a.t.end / 60)) + pad(a.t.end % 60) + '00\r\n' +
+      'SUMMARY:' + a.nama + '\r\nLOCATION:' + (a.lokasiNama || a.area) + '\r\nEND:VEVENT\r\n';
+  });
+  ics += 'END:VCALENDAR';
+  return 'data:text/calendar;charset=utf-8,' + encodeURIComponent(ics);
+}
+
+export function createSharedPlan(ids) {
+  const acts = uniqueValidActivities(ids);
+  if (!acts.length) throw err(400, 'empty_plan');
+  for (let tries = 0; tries < 5; tries++) {
+      const id = shortId();
+      try {
+        wSharedPlan.run(id, JSON.stringify(acts.map((a) => a.id)));
+      return { id, ids: acts.map((a) => a.id), activities: acts, plan: planModelFromActivities(acts), ics: buildPlanIcs(acts) };
+    } catch (e) {
+      if (!String(e.message || '').includes('UNIQUE')) throw e;
+    }
+  }
+  throw err(500, 'share_id_collision');
+}
+
+export function getSharedPlan(id, { countView = false } = {}) {
+  const row = qSharedPlan.get(id);
+  if (!row) return null;
+  let ids = [];
+  try { ids = JSON.parse(row.items_json); } catch (e) { ids = []; }
+  const acts = uniqueValidActivities(ids);
+  if (countView) wSharedPlanCount.run(id);
+  return {
+    id: row.id,
+    ids: acts.map((a) => a.id),
+    activities: acts,
+    plan: planModelFromActivities(acts),
+    ics: buildPlanIcs(acts),
+    shareCount: row.share_count,
+    createdAt: row.created_at
+  };
+}
+
 // ── curators (read) ───────────────────────────────────────────────────────
 const qCurators = db.prepare('SELECT * FROM curator WHERE aktif = 1 ORDER BY sort_order, nama');
 const qCuratorsAll = db.prepare('SELECT * FROM curator ORDER BY sort_order, nama');
@@ -185,8 +298,8 @@ const err = (status, message) => Object.assign(new Error(message), { status });
 
 const wOrg = db.prepare('INSERT OR REPLACE INTO organizer (id,nama,instansi,kontak) VALUES (?,?,?,?)');
 const wAct = db.prepare(`INSERT OR REPLACE INTO activity
-  (id,nama,penyelenggara_id,penyelenggara,color,emoji,deskripsi,usia_min,usia_max,lokasi_nama,area,tanggal,jam,biaya,link,media_url,lat,lng,map_x,map_y,perlu_daftar,rutin,kontak_wa,window_mulai,window_selesai)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  (id,nama,penyelenggara_id,penyelenggara,color,emoji,deskripsi,usia_min,usia_max,lokasi_nama,area,tanggal,jam,biaya,link,media_url,lat,lng,map_x,map_y,primary_category,time_mode,visit_minutes,venue_id,perlu_daftar,rutin,kontak_wa,window_mulai,window_selesai)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 const dCat = db.prepare('DELETE FROM activity_category WHERE activity_id = ?');
 const dOcc = db.prepare('DELETE FROM occurrence WHERE activity_id = ?');
 const dTier = db.prepare('DELETE FROM ticket_tier WHERE activity_id = ?');
@@ -219,6 +332,7 @@ function writeActivity(id, p) {
       id, p.nama, orgId, p.penyelenggara || '', p.color || '#F15A22', p.emoji || '📍', p.deskripsi || '',
       +p.usia_min, +p.usia_max, p.lokasiNama || '', p.area || '', p.tanggal || '', p.jam || '', p.biaya || 'gratis', p.link || '', p.mediaUrl || null,
       +p.lat, +p.lng, p.x ?? null, p.y ?? null,
+      p.primaryCategory || (p.kategori || [])[0] || null, p.timeMode || null, p.visitMinutes || null, p.venueId || null,
       p.perlu_daftar ? 1 : 0, p.rutin ? 1 : 0, p.kontak || null, win[0], win[1]
     );
     dCat.run(id); dOcc.run(id); dTier.run(id); dTr.run(id); dSub.run(id);

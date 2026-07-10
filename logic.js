@@ -6,7 +6,7 @@
  * heuristics, calendar occurrence expansion, and WA/.ics artifact generation.
  * Keeping it pure makes it trivially unit-testable and easy to port server-side.
  */
-import { RAW, HARI, PERIOD, WINDOW, SUB, AGEBANDS, INTERESTS, CATLABEL, CAT_COLOR, EXTRA } from './data.js';
+import { RAW, POI, HARI, PERIOD, WINDOW, SUB, AGEBANDS, INTERESTS, CATLABEL, CAT_COLOR, EXTRA } from './data.js';
 
 // ── time / distance / money helpers ───────────────────────────────────────
 // "15.30–23.00 WIB" → { start: 930, end: 1380 } (minutes past midnight)
@@ -15,6 +15,13 @@ export function parseJam(j) {
   return m ? { start: +m[1] * 60 + +m[2], end: +m[3] * 60 + +m[4] } : { start: 0, end: 0 };
 }
 export const fmtMin = (t) => { const h = Math.floor(t / 60), m = t % 60; return (h < 10 ? '0' + h : h) + '.' + (m < 10 ? '0' + m : m); };
+export const fmtInputTime = (t) => fmtMin(t).replace('.', ':');
+export function parseInputTime(v) {
+  const m = String(v || '').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const mins = +m[1] * 60 + +m[2];
+  return mins >= 0 && mins < 1440 ? mins : null;
+}
 export const fmtDur = (t) => { const h = Math.floor(t / 60), m = t % 60; return h ? (h + ' jam' + (m ? ' ' + m + ' mnt' : '')) : (m + ' mnt'); };
 // Great-circle distance (Haversine) between two activities, in km, from real
 // lat/lng. Falls back to 0 if coordinates are missing.
@@ -34,10 +41,14 @@ export const halteShort = (arr) => (arr && arr[0]) ? arr[0].split(' · ')[0] : '
 export const fmtRp = (n) => n ? ('Rp ' + n.toLocaleString('id-ID')) : 'Gratis';
 export const biayaLabelOf = (p) => { const ex = EXTRA[p.id] || {}; return ex.tiket ? ('Mulai Rp ' + ex.tiket[0][1]) : (p.biaya === 'gratis' ? 'Gratis' : ('Rp ' + p.biaya)); };
 export const usiaLabelOf = (p) => (p.usia_min <= 6 && p.usia_max >= 24) ? 'Semua umur' : (p.usia_max >= 99 ? (p.usia_min + ' thn ke atas') : (p.usia_min + '–' + p.usia_max + ' tahun'));
-export const catLabelOf = (p) => CATLABEL[p.kategori[0]] || p.kategori[0];
-// Display color comes from the FIRST category, never from the per-item `color`
-// column — keeps every card/pin/badge of one category the same hue.
-export const catColorOf = (p) => CAT_COLOR[(p.kategori || [])[0]] || '#FC351C';
+export const primaryCatOf = (p) => p.primaryCategory || (p.kategori || [])[0] || 'festival';
+export const catLabelOf = (p) => CATLABEL[primaryCatOf(p)] || primaryCatOf(p);
+// Display color comes from the primary category. Additional categories are still
+// used for filtering and shown as secondary tags.
+export const catColorOf = (p) => CAT_COLOR[primaryCatOf(p)] || '#FC351C';
+export const categoryTagsOf = (p) => (p.kategori || []).map(k => CATLABEL[k] || k);
+export const timeModeOf = (p) => p.timeMode || ((p.kategori || []).some(k => ['festival', 'belanja', 'kuliner', 'museum'].includes(k)) ? 'open_hours' : 'scheduled');
+export const timeModeLabelOf = (p) => timeModeOf(p) === 'scheduled' ? 'Jadwal acara' : (timeModeOf(p) === 'mixed' ? 'Jam buka + acara' : 'Jam buka');
 
 // ── urgency ("minggu terakhir!") from the human-readable tanggal field ─────
 // Only bounded runs produce an end date: "12 Juni–14 Juli 2026" and
@@ -68,7 +79,7 @@ export function activeCats(state) {
   const cats = new Set();
   state.interests.forEach(label => {
     const m = INTERESTS.find(i => i[0] === label);
-    if (m && m[2]) cats.add(m[2]);
+    if (m && m[2]) (Array.isArray(m[2]) ? m[2] : [m[2]]).forEach(k => cats.add(k));
   });
   return cats;
 }
@@ -97,9 +108,43 @@ export function filtered(state) {
 }
 
 // ── daily plan: order by start time, compute segments, totals, conflicts ───
+function plannedTime(p, state) {
+  const window = parseJam(p.jam);
+  const override = state.planTimeOverrides?.[p.id] || {};
+  const startOverride = parseInputTime(override.start);
+  const endOverride = parseInputTime(override.end);
+  if (timeModeOf(p) === 'scheduled') {
+    const start = startOverride ?? window.start;
+    const end = Math.max(start + 15, endOverride ?? window.end);
+    return { start, end, window, isEdited: startOverride != null || endOverride != null };
+  }
+  const defaultVisit = Math.max(30, +(p.visitMinutes || 90));
+  const start = startOverride ?? window.start;
+  const end = Math.max(start + 15, Math.min(window.end || start + defaultVisit, endOverride ?? (start + defaultVisit)));
+  return { start, end, window, isEdited: startOverride != null || endOverride != null };
+}
+
+function poiForGap(a, b, gapMinutes, travelMinutes) {
+  if (gapMinutes < 45 || a.lat == null || b.lat == null) return null;
+  const midpoint = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 };
+  const usedVenue = new Set([a.venueId, b.venueId].filter(Boolean));
+  return POI
+    .filter(p => !usedVenue.has(p.id))
+    .map(p => ({
+      ...p,
+      d: Math.min(distKm(a, p), distKm(p, b), distKm(midpoint, p)),
+      visitMinutes: Math.min(+(p.visitMinutes || 30), Math.max(20, gapMinutes - travelMinutes - 10))
+    }))
+    .filter(p => p.d <= 1.6 && p.visitMinutes >= 20)
+    .sort((a, b) => a.d - b.d || b.visitMinutes - a.visitMinutes)[0] || null;
+}
+
 export function planComputed(state) {
   const events = state.plan.map(id => RAW.find(p => p.id === id)).filter(Boolean)
-    .map(p => ({ ...p, t: parseJam(p.jam) }))
+    .map(p => {
+      const t = plannedTime(p, state);
+      return { ...p, t, windowTime: t.window, originalTime: parseJam(p.jam), timeEdited: t.isEdited, timeMode: timeModeOf(p) };
+    })
     .sort((a, b) => a.t.start - b.t.start);
 
   const items = events.map((p, i) => {
@@ -107,33 +152,63 @@ export function planComputed(state) {
     let seg = null;
     if (next) {
       const km = distKm(p, next);
-      const menit = Math.round(km / 18 * 60 + 8); // ~18 km/h + 8 min fixed overhead
+      const roughMenit = Math.round(km / 18 * 60 + 8); // ~18 km/h + 8 min fixed overhead
+      const overrideKey = p.id + '>' + next.id;
+      const override = state.travelOverrides && Number.isFinite(+state.travelOverrides[overrideKey])
+        ? Math.max(1, Math.round(+state.travelOverrides[overrideKey]))
+        : null;
+      const menit = override || roughMenit;
       const overlap = next.t.start < p.t.end;
       const tight = !overlap && next.t.start < (p.t.end + menit);
+      const gapMinutes = Math.max(0, next.t.start - p.t.end - menit);
       const warn = overlap || tight;
       const exA = EXTRA[p.id] || {}, exB = EXTRA[next.id] || {};
       const kmLabel = (km < 1 ? (Math.round(km * 10) / 10) : Math.round(km)) + ' km';
       seg = {
         warn,
-        head: '🚌 ' + kmLabel + ' · ±' + menit + ' mnt' + (overlap ? ' · ⚠ jadwal bentrok' : (tight ? ' · ⚠ waktu pindah mepet' : '')),
-        route: halteShort(exA.transport) + '  ➜  ' + halteShort(exB.transport)
+        overrideKey,
+        menit,
+        roughMenit,
+        isOverride: override != null,
+        km,
+        departAt: fmtMin(p.t.end),
+        arriveAt: fmtMin(p.t.end + menit),
+        gapMinutes,
+        poi: poiForGap(p, next, gapMinutes, menit),
+        head: 'Perkiraan kasar ' + kmLabel + ' · ±' + menit + ' mnt' + (override != null ? ' · diedit' : '') + (overlap ? ' · ⚠ jadwal bentrok' : (tight ? ' · ⚠ waktu pindah mepet' : ''))
       };
     }
-    return { ...p, jamLabel: p.jam, biayaLabel: biayaLabelOf(p), seg };
+    return {
+      ...p,
+      jamLabel: fmtMin(p.t.start) + '–' + fmtMin(p.t.end),
+      sourceJamLabel: p.jam,
+      durasi: Math.max(0, p.t.end - p.t.start),
+      windowLabel: fmtMin(p.windowTime.start) + '–' + fmtMin(p.windowTime.end),
+      biayaLabel: biayaLabelOf(p),
+      modeLabel: timeModeLabelOf(p),
+      seg
+    };
   });
 
   let totalTravel = 0, conflictCount = 0;
   for (let i = 0; i < events.length - 1; i++) {
     const a = events[i], b = events[i + 1];
-    const menit = Math.round(distKm(a, b) / 18 * 60 + 8);
+    const overrideKey = a.id + '>' + b.id;
+    const roughMenit = Math.round(distKm(a, b) / 18 * 60 + 8);
+    const menit = state.travelOverrides && Number.isFinite(+state.travelOverrides[overrideKey])
+      ? Math.max(1, Math.round(+state.travelOverrides[overrideKey]))
+      : roughMenit;
     totalTravel += menit;
     if (b.t.start < a.t.end || b.t.start < a.t.end + menit) conflictCount++;
   }
   const totalBiaya = events.reduce((sum, p) => sum + biayaMin(p), 0);
   const dayStart = events.length ? fmtMin(events[0].t.start) : '';
   const dayEnd = events.length ? fmtMin(Math.max.apply(null, events.map(e => e.t.end))) : '';
+  const activeMinutes = events.reduce((sum, p) => sum + Math.max(0, p.t.end - p.t.start), 0);
+  const daySpan = events.length ? Math.max.apply(null, events.map(e => e.t.end)) - events[0].t.start : 0;
+  const idleMinutes = Math.max(0, daySpan - activeMinutes - totalTravel);
 
-  return { events, items, totalTravel, conflictCount, totalBiaya, dayStart, dayEnd };
+  return { events, items, totalTravel, activeMinutes, daySpan, idleMinutes, conflictCount, totalBiaya, dayStart, dayEnd };
 }
 
 // WhatsApp share URL + .ics data-URI for a computed plan.
